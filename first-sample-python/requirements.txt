@@ -1,0 +1,24 @@
+# Required dependencies for first-sample-python
+# Install with: pip install -r requirements.txt
+
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+statsmodels>=0.13.0
+
+# Machine Learning
+scikit-learn>=1.0.0
+xgboost>=1.5.0
+
+# Deep Learning (for neural network models - nn.py)
+tensorflow>=2.8.0
+
+# Plotting
+matplotlib>=3.4.0
+
+# Excel support (optional)
+openpyxl>=3.0.0
+
+# NOTE: pyreadr is NO LONGER REQUIRED
+# Just save your data as CSV and use load_data("yourdata.csv")

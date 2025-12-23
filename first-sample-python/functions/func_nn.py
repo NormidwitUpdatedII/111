@@ -1,0 +1,148 @@
+"""
+Neural Network (Deep Learning) functions for inflation forecasting.
+Converted from R to Python with exact correspondence.
+Uses TensorFlow/Keras instead of h2o.
+"""
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import EarlyStopping
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from functions.func_ar import embed
+
+
+def runnn(Y, indice, lag):
+    """
+    Run Neural Network (Deep Learning) regression.
+    
+    Parameters:
+    -----------
+    Y : numpy.ndarray
+        Data matrix
+    indice : int
+        Column index to forecast (1-indexed to match R)
+    lag : int
+        Number of lags
+        
+    Returns:
+    --------
+    dict with keys:
+        - model: fitted neural network model
+        - pred: prediction
+    """
+    # Remove last column (dummy variable)
+    dum = Y[:, -1]
+    Y_no_dum = Y[:, :-1]
+    
+    # Center the data (scale=FALSE in R means center only)
+    Y_centered = Y_no_dum - np.mean(Y_no_dum, axis=0)
+    
+    # PCA
+    pca = PCA()
+    scores = pca.fit_transform(Y_centered)
+    
+    # Combine original data (without dummy) with first 4 principal components
+    Y2 = np.column_stack([Y_no_dum, scores[:, :4]])
+    
+    aux = embed(Y2, 4 + lag)
+    y = aux[:, indice - 1]  # Adjust for 0-indexing
+    
+    # Remove first (ncol(Y2)*lag) columns
+    n_cols_Y2 = Y2.shape[1]
+    X = aux[:, (n_cols_Y2 * lag):]
+    
+    if lag == 1:
+        X_out = aux[-1, :X.shape[1]]
+    else:
+        X_temp = aux[:, (n_cols_Y2 * (lag - 1)):]
+        X_out = X_temp[-1, :X.shape[1]]
+    
+    y = y[:(len(y) - lag + 1)]
+    X = X[:(X.shape[0] - lag + 1), :]
+    
+    # Build neural network model matching h2o.deeplearning parameters
+    # activation='Rectifier' -> ReLU
+    # hidden=c(32,16,8) -> 3 hidden layers with 32, 16, 8 neurons
+    # epochs=100
+    # seed=1 for reproducibility
+    
+    np.random.seed(1)
+    keras.utils.set_random_seed(1)
+    
+    model = keras.Sequential([
+        layers.Dense(32, activation='relu', input_shape=(X.shape[1],)),
+        layers.Dense(16, activation='relu'),
+        layers.Dense(8, activation='relu'),
+        layers.Dense(1)
+    ])
+    
+    model.compile(optimizer='adam', loss='mse')
+    
+    # Train the model
+    # train_samples_per_iteration=-2 in h2o means adaptive (we'll use early stopping)
+    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    
+    model.fit(X, y, epochs=100, batch_size=32, verbose=0, callbacks=[early_stop])
+    
+    # Prediction
+    pred = model.predict(X_out.reshape(1, -1), verbose=0)[0, 0]
+    
+    return {"model": model, "pred": pred}
+
+
+def nn_rolling_window(Y, nprev, indice=1, lag=1):
+    """
+    Rolling window Neural Network forecasting.
+    
+    Parameters:
+    -----------
+    Y : numpy.ndarray
+        Data matrix
+    nprev : int
+        Number of predictions (rolling window size)
+    indice : int
+        Column index to forecast (1-indexed to match R)
+    lag : int
+        Number of lags
+        
+    Returns:
+    --------
+    dict with keys:
+        - pred: predictions
+        - errors: RMSE and MAE
+    """
+    save_pred = np.full((nprev, 1), np.nan)
+    
+    for i in range(nprev, 0, -1):
+        Y_window = Y[(nprev - i):(Y.shape[0] - i), :]
+        nn_result = runnn(Y_window, indice, lag)
+        save_pred[nprev - i, 0] = nn_result["pred"]
+        print(f"iteration {nprev - i + 1}")
+    
+    # Adjust index for plotting
+    real = Y[:, indice - 1]
+    
+    # Plot
+    plt.figure(figsize=(12, 6))
+    plt.plot(real, 'b-', label='Actual')
+    
+    pred_line = np.concatenate([np.full(len(real) - nprev, np.nan), save_pred.flatten()])
+    plt.plot(pred_line, 'r-', label='Predicted')
+    plt.legend()
+    plt.title(f'Neural Network Forecasting (lag={lag})')
+    plt.xlabel('Time')
+    plt.ylabel('Value')
+    plt.grid(True)
+    plt.show()
+    
+    # Calculate errors
+    real_tail = real[-nprev:]
+    rmse = np.sqrt(np.mean((real_tail - save_pred.flatten()) ** 2))
+    mae = np.mean(np.abs(real_tail - save_pred.flatten()))
+    errors = {"rmse": rmse, "mae": mae}
+    
+    return {"pred": save_pred, "errors": errors}
